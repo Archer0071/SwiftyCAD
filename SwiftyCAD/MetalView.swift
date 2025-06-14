@@ -9,109 +9,142 @@ import SwiftUI
 import MetalKit
 
 struct MetalView: UIViewRepresentable {
-    let rendererState: RendererState
-    private let renderer = CADRenderer()
+    @ObservedObject var rendererState: RendererState
+    private let renderer: CADRenderer
+    
+    init(rendererState: RendererState) {
+        self.rendererState = rendererState
+        self.renderer = CADRenderer()
+    }
     
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView()
-        view.device = MTLCreateSystemDefaultDevice()
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            fatalError("Metal is not supported on this device")
+        }
+        
+        view.device = device
         view.clearColor = MTLClearColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1)
         view.delegate = renderer
         view.depthStencilPixelFormat = .depth32Float
+        view.colorPixelFormat = .bgra8Unorm
         renderer.mtkView = view
         
-        // Set up notifications
-        NotificationCenter.default.addObserver(
-            forName: .addObjectToScene,
-            object: nil,
-            queue: .main
-        ) { notification in
-            if let object = notification.object as? SceneObject {
-                self.renderer.addObject(object)
-            }
-        }
+        // Add gesture recognizers
+        setupGestureRecognizers(for: view, context: context)
         
-        NotificationCenter.default.addObserver(
-            forName: .toggleProjectionMode,
-            object: nil,
-            queue: .main
-        ) { _ in
-            self.renderer.toggleProjectionMode()
-        }
+        // Add tap recognizer
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        view.addGestureRecognizer(tap)
         
-        // Gestures
-        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
-        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-        
-        view.addGestureRecognizer(pan)
-        view.addGestureRecognizer(pinch)
-        view.addGestureRecognizer(doubleTap)
+        setupNotificationObservers()
         
         return view
     }
     
     func updateUIView(_ uiView: MTKView, context: Context) {
-        // Update projection mode if changed
         renderer.isOrthographic = rendererState.isOrthographic
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(renderer: renderer)
+        Coordinator(renderer: renderer,rendererState: rendererState)
+    }
+    
+    private func setupGestureRecognizers(for view: MTKView, context: Context) {
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
+        
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(pinch)
+    }
+    
+    private func setupNotificationObservers() {
+        NotificationCenter.default.addObserver(
+            forName: .addObjectToScene,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let object = notification.object as? SceneObject else { return }
+            self.renderer.addObject(object)
+        }
     }
     
     class Coordinator: NSObject {
-        var renderer: CADRenderer
-        var previousTranslation: CGPoint = .zero
-        var selectedAxis: CADRenderer.MovementAxis = .none
+        private weak var renderer: CADRenderer?
+        private weak var rendererState: RendererState?
+        private var previousTranslation: CGPoint = .zero
+        private var selectedAxis: CADRenderer.MovementAxis = .none
         
-        init(renderer: CADRenderer) {
+        init(renderer: CADRenderer, rendererState: RendererState) {
             self.renderer = renderer
+            self.rendererState = rendererState
+        }
+        
+        @objc func handleTap(_ sender: UITapGestureRecognizer) {
+            guard let view = sender.view as? MTKView,
+                  let renderer = renderer,
+                  let rendererState = rendererState else { return }
+            
+            let location = sender.location(in: view)
+            renderer.selectObject(at: location, in: view)
+            
+            if let selectedID = renderer.selectedObjectID,
+               let selectedObject = renderer.sceneObjects.first(where: { $0.id == selectedID }) {
+                rendererState.selectedObject = selectedObject
+            } else {
+                rendererState.selectedObject = nil
+            }
         }
         
         @objc func handlePan(_ sender: UIPanGestureRecognizer) {
-            let translation = sender.translation(in: sender.view)
-            let deltaX = Float(translation.x - previousTranslation.x) * 0.01
-            let deltaY = Float(translation.y - previousTranslation.y) * 0.01
+            guard let view = sender.view as? MTKView, let renderer = renderer else { return }
             
-            if sender.state == .began {
-                // When pan starts, detect if we're touching an axis
-                let location = sender.location(in: sender.view)
-                selectedAxis = renderer.detectMovementAxis(at: location, in: sender.view as! MTKView)
-            }
+            let translation = sender.translation(in: view)
+            let deltaX = Float(translation.x - previousTranslation.x)
+            let deltaY = Float(translation.y - previousTranslation.y)
             
-            if sender.numberOfTouches == 1 {
-                if selectedAxis != .none {
-                    // Move object along selected axis
-                    let movementVector = SIMD3<Float>(deltaX, -deltaY, 0)
-                    renderer.moveSelectedObject(translation: movementVector, along: selectedAxis)
-                } else {
-                    // Rotate camera if not moving an object
-                    renderer.camera.rotate(deltaX: deltaX, deltaY: deltaY)
+            switch sender.state {
+            case .began:
+                let location = sender.location(in: view)
+                selectedAxis = renderer.detectMovementAxis(at: location, in: view)
+                previousTranslation = translation
+                
+            case .changed:
+                if sender.numberOfTouches == 1 {
+                    if selectedAxis != .none {
+                        // Scale the movement for better control
+                        let movementScale: Float = 0.01
+                        let movementVector = SIMD3<Float>(deltaX * movementScale, -deltaY * movementScale, 0)
+                        renderer.moveSelectedObject(translation: movementVector, along: selectedAxis)
+                    } else {
+                        // Camera rotation
+                        let rotationScale: Float = 0.005
+                        renderer.camera.rotate(deltaX: deltaX * rotationScale, deltaY: deltaY * rotationScale)
+                    }
+                } else if sender.numberOfTouches == 2 {
+                    // Camera pan
+                    let panScale: Float = 0.005
+                    renderer.camera.pan(deltaX: deltaX * panScale, deltaY: deltaY * panScale)
                 }
-            } else if sender.numberOfTouches == 2 {
-                // Pan camera with two fingers
-                renderer.camera.pan(deltaX: deltaX, deltaY: deltaY)
-            }
-            
-            previousTranslation = translation
-            
-            if sender.state == .ended {
+                previousTranslation = translation
+                
+            case .ended, .cancelled:
                 previousTranslation = .zero
                 selectedAxis = .none
+                
+            default:
+                break
             }
         }
         
         @objc func handlePinch(_ sender: UIPinchGestureRecognizer) {
+            guard let renderer = renderer, sender.state == .changed else { return }
             let delta = Float(1 - sender.scale) * 0.5
             renderer.camera.zoom(delta: delta)
             sender.scale = 1
-        }
-        
-        @objc func handleDoubleTap(_ sender: UITapGestureRecognizer) {
-            let location = sender.location(in: sender.view)
-            renderer.selectObject(at: location, in: sender.view as! MTKView)
         }
     }
 }

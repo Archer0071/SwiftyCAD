@@ -47,6 +47,7 @@ class CADRenderer: NSObject, MTKViewDelegate {
         self.mtkView = mtkView
         super.init()
         setupMetal()
+        setupNotificationObservers()
         setupScene()
     }
     
@@ -68,6 +69,31 @@ class CADRenderer: NSObject, MTKViewDelegate {
         // Generate geometry
         createPrimitives()
     }
+    private func setupNotificationObservers() {
+           NotificationCenter.default.addObserver(
+               forName: .addObjectToScene,
+               object: nil,
+               queue: .main
+           ) { [weak self] notification in
+               guard let object = notification.object as? SceneObject else { return }
+               self?.addObject(object)
+           }
+           
+           NotificationCenter.default.addObserver(
+               forName: .updateObjectPosition,
+               object: nil,
+               queue: .main
+           ) { [weak self] notification in
+               guard let object = notification.object as? SceneObject else { return }
+               self?.updateObjectPosition(object)
+           }
+       }
+       
+       private func updateObjectPosition(_ object: SceneObject) {
+           if let index = sceneObjects.firstIndex(where: { $0.id == object.id }) {
+               sceneObjects[index].position = object.position
+           }
+       }
     
     func createPipelines() {
         guard let library = device.makeDefaultLibrary() else {
@@ -666,21 +692,30 @@ class CADRenderer: NSObject, MTKViewDelegate {
         guard let selectedID = selectedObjectID,
               let index = sceneObjects.firstIndex(where: { $0.id == selectedID }) else { return }
         
-        var effectiveTranslation = SIMD3<Float>(0, 0, 0)
+        // Transform the movement vector to world space based on camera orientation
+        let viewMatrix = camera.viewMatrix
+        let right = SIMD3<Float>(viewMatrix.columns.0.x, viewMatrix.columns.0.y, viewMatrix.columns.0.z)
+        let up = SIMD3<Float>(viewMatrix.columns.1.x, viewMatrix.columns.1.y, viewMatrix.columns.1.z)
+        let forward = SIMD3<Float>(-viewMatrix.columns.2.x, -viewMatrix.columns.2.y, -viewMatrix.columns.2.z)
+        
+        var worldTranslation = SIMD3<Float>(0, 0, 0)
         
         switch axis {
         case .x:
-            effectiveTranslation = SIMD3<Float>(translation.x, 0, 0)
+            // Move along world X axis (right)
+            worldTranslation = right * translation.x
         case .y:
-            effectiveTranslation = SIMD3<Float>(0, translation.y, 0)
+            // Move along world Y axis (up)
+            worldTranslation = up * translation.y
         case .z:
-            effectiveTranslation = SIMD3<Float>(0, 0, translation.z)
+            // Move along world Z axis (forward)
+            worldTranslation = forward * translation.z
         case .none:
-            // Free movement if no axis selected
-            effectiveTranslation = translation
+            // Free movement in screen space
+            worldTranslation = right * translation.x + up * translation.y
         }
         
-        sceneObjects[index].position += effectiveTranslation
+        sceneObjects[index].position += worldTranslation
     }
     
     func moveSelectedObject(translation: SIMD3<Float>) {
@@ -715,12 +750,18 @@ class CADRenderer: NSObject, MTKViewDelegate {
 }
 
 // MARK: - Supporting Types
-struct SceneObject {
+class SceneObject {
     let id = UUID()
     let type: ObjectType
     var position: SIMD3<Float>
     var rotation: SIMD3<Float> = [0, 0, 0]
     var scale: SIMD3<Float>
+    
+    init(type: ObjectType, position: SIMD3<Float>, scale: SIMD3<Float>) {
+        self.type = type
+        self.position = position
+        self.scale = scale
+    }
     
     var transformMatrix: float4x4 {
         float4x4(translation: position) *
@@ -730,6 +771,7 @@ struct SceneObject {
         float4x4(scaling: scale)
     }
 }
+
 
 enum ObjectType: String {
     case cube

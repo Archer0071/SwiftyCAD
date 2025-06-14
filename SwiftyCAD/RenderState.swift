@@ -10,6 +10,7 @@ import simd
 
 class RendererState: ObservableObject {
     @Published var isOrthographic = false
+    @Published var selectedObject: SceneObject?
     
     func addShape(_ type: ObjectType) {
         let position: SIMD3<Float>
@@ -28,16 +29,24 @@ class RendererState: ObservableObject {
         }
         
         let newObject = SceneObject(type: type, position: position, scale: scale)
+        selectedObject = newObject
         NotificationCenter.default.post(name: .addObjectToScene, object: newObject)
     }
     
     func toggleProjection() {
         isOrthographic.toggle()
-        NotificationCenter.default.post(name: .toggleProjectionMode, object: nil)
+    }
+    
+    func updateSelectedObjectPosition(_ position: SIMD3<Float>) {
+        guard let selected = selectedObject else { return }
+        selected.position = position
+        NotificationCenter.default.post(name: .updateObjectPosition, object: selected)
     }
 }
 
 extension Notification.Name {
     static let addObjectToScene = Notification.Name("AddObjectToScene")
     static let toggleProjectionMode = Notification.Name("ToggleProjectionMode")
+    static let updateObjectPosition = Notification.Name("UpdateObjectPosition")
+
 }
