@@ -70,30 +70,43 @@ class CADRenderer: NSObject, MTKViewDelegate {
         createPrimitives()
     }
     private func setupNotificationObservers() {
-           NotificationCenter.default.addObserver(
-               forName: .addObjectToScene,
-               object: nil,
-               queue: .main
-           ) { [weak self] notification in
-               guard let object = notification.object as? SceneObject else { return }
-               self?.addObject(object)
-           }
-           
-           NotificationCenter.default.addObserver(
-               forName: .updateObjectPosition,
-               object: nil,
-               queue: .main
-           ) { [weak self] notification in
-               guard let object = notification.object as? SceneObject else { return }
-               self?.updateObjectPosition(object)
-           }
-       }
-       
-       private func updateObjectPosition(_ object: SceneObject) {
-           if let index = sceneObjects.firstIndex(where: { $0.id == object.id }) {
-               sceneObjects[index].position = object.position
-           }
-       }
+        NotificationCenter.default.addObserver(
+            forName: .addObjectToScene,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let object = notification.object as? SceneObject else { return }
+            self?.addObject(object)
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: .updateObjectPosition,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let object = notification.object as? SceneObject else { return }
+            self?.updateObjectPosition(object)
+        }
+        NotificationCenter.default.addObserver(
+            forName: .updateObjectRotation,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let object = notification.object as? SceneObject else { return }
+            self?.updateObjectRotation(object)
+        }
+    }
+    
+    private func updateObjectPosition(_ object: SceneObject) {
+        if let index = sceneObjects.firstIndex(where: { $0.id == object.id }) {
+            sceneObjects[index].position = object.position
+        }
+    }
+    private func updateObjectRotation(_ object: SceneObject) {
+        if let index = sceneObjects.firstIndex(where: { $0.id == object.id }) {
+            sceneObjects[index].rotation = object.rotation
+        }
+    }
     
     func createPipelines() {
         guard let library = device.makeDefaultLibrary() else {
@@ -572,8 +585,8 @@ class CADRenderer: NSObject, MTKViewDelegate {
         ]
         
         vertexBuffers["axisGizmo"] = device.makeBuffer(bytes: vertices,
-                                                    length: vertices.count * MemoryLayout<GizmoVertex>.stride,
-                                                    options: [])
+                                                       length: vertices.count * MemoryLayout<GizmoVertex>.stride,
+                                                       options: [])
     }
     
     private func drawAxisGizmo(encoder: MTLRenderCommandEncoder, viewMatrix: float4x4, projectionMatrix: float4x4) {
