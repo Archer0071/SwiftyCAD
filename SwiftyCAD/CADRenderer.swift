@@ -426,8 +426,9 @@ class CADRenderer: NSObject, MTKViewDelegate {
             
             let isSelected = object.id == selectedObjectID
             var color: SIMD4<Float> = isSelected ?
-            [1, 0.8, 0, 1] : // Selected - gold
-            [0.4, 0.6, 1.0, 1.0] // Default - light blue
+            [0.4, 0.6, 1.0, 1.0]: // Default - light blue
+            [0.749, 0.749, 0.749, 1] // Selected - gray
+            
             
             encoder?.setVertexBuffer(vertexBuffers[object.type.rawValue], offset: 0, index: 0)
             encoder?.setVertexBytes(&mvp, length: MemoryLayout<float4x4>.stride, index: 1)
